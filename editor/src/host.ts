@@ -26,39 +26,47 @@ export function silverbullet(): SilverBulletGlobal | undefined {
 
 const pageName = (file: string) => file.replace(/\.md$/i, "");
 
-export function silverBulletHost(sb: SilverBulletGlobal): Host {
+export type Syscall = (name: string, ...args: unknown[]) => Promise<any>;
+
+// Host backed by SilverBullet syscalls; `changed` reports edits (document editor only).
+export function syscallHost(syscall: Syscall, changed: () => void = () => {}, readOnly = false): Host {
   return {
     embedded: true,
     async readOnly() {
-      try { return (await sb.syscall("system.getMode")) === "ro"; } catch { return false; }
+      if (readOnly) return true;
+      try { return (await syscall("system.getMode")) === "ro"; } catch { return false; }
     },
-    changed() { sb.sendMessage("file-changed", {}); },
+    changed,
     navigate(file, subpath) {
       const isPage = /\.md$/i.test(file) || !/\.[a-z0-9]+$/i.test(file);
       const target = (isPage ? pageName(file) : file) + (subpath ?? "");
-      sb.syscall("editor.navigate", target).catch((error) => console.error(error));
+      syscall("editor.navigate", target).catch((error) => console.error(error));
     },
-    openUrl(url) { sb.syscall("editor.openUrl", url).catch((error) => console.error(error)); },
+    openUrl(url) { syscall("editor.openUrl", url).catch((error) => console.error(error)); },
     async readFile(path) {
-      try { return await sb.syscall("space.readFile", path); } catch { return null; }
+      try { return await syscall("space.readFile", path); } catch { return null; }
     },
     async pickFile() {
-      const files: { name: string; lastModified?: number }[] = await sb.syscall("space.listFiles");
+      const files: { name: string; lastModified?: number }[] = await syscall("space.listFiles");
       const options = files
         .filter((file) => !file.name.startsWith("_") && !/\.plug\.js$/.test(file.name) && !file.name.startsWith("Library/Std/"))
         .sort((first, second) => (second.lastModified ?? 0) - (first.lastModified ?? 0))
         .map((file) => ({ name: file.name, description: /\.md$/i.test(file.name) ? "page" : "document" }));
-      const picked = await sb.syscall("editor.filterBox", "Add file", options, "Pick a page or document to add to the canvas", "Name");
+      const picked = await syscall("editor.filterBox", "Add file", options, "Pick a page or document to add to the canvas", "Name");
       return picked?.name ?? null;
     },
     async prompt(message, value = "") {
-      const result = await sb.syscall("editor.prompt", message, value);
+      const result = await syscall("editor.prompt", message, value);
       return result ?? null;
     },
     notify(message, type = "info") {
-      sb.syscall("editor.flashNotification", message, type).catch(() => {});
+      syscall("editor.flashNotification", message, type).catch(() => {});
     },
   };
+}
+
+export function silverBulletHost(sb: SilverBulletGlobal): Host {
+  return syscallHost((name, ...args) => sb.syscall(name, ...args), () => sb.sendMessage("file-changed", {}));
 }
 
 export function standaloneHost(onChange: () => void): Host {

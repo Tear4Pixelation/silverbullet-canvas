@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <!-- Mimics SilverBullet's IFrameDocumentEditor host (client/document_editor.ts and
-     client/document_editor_js.ts in silverbulletmd/silverbullet) for testing the
-     plug's editor HTML without a server. -->
+     client/document_editor_js.ts in silverbulletmd/silverbullet) and its code-widget
+     sandbox (client/sandbox/panel_html.ts, widget_sandbox_iframe.ts) for testing the
+     plug's editor and preview without a server. -->
 <html data-theme="dark">
 <head>
 <meta charset="utf-8">
@@ -14,6 +15,11 @@
   #host { flex: 1; position: relative; }
   #host iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   #log { height: 90px; overflow: auto; font: 11px monospace; padding: 4px 6px; border-top: 1px solid #555; }
+  #widgethost { padding: 8px 16px; border-top: 1px solid #555; max-height: 45vh; overflow: auto; }
+  #widgethost iframe { width: 100%; height: 150px; border: 0; display: block; }
+  /* Stand-ins for SilverBullet editor rules, to check they get mirrored into cards. */
+  #sb-main .cm-editor .sb-line-h1 { color: tomato; }
+  #sb-main .cm-editor .sb-wiki-link-page { color: limegreen; }
 </style>
 </head>
 <body>
@@ -24,6 +30,7 @@
   <span id="status"></span>
 </div>
 <div id="host"></div>
+<div id="widgethost"></div>
 <div id="log"></div>
 <script>
 const SHIM = `
@@ -149,7 +156,78 @@ document.getElementById("external").onclick = () => {
   window.harness.openFile(files["test.canvas"]);
 };
 document.getElementById("save").onclick = requestSave;
-boot();
+
+// ---------- code widget sandbox ----------
+const PANEL = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><base target="_top"><script>
+const pendingRequests = new Map();
+let syscallReqId = 0;
+globalThis.syscall = async (name, ...args) => new Promise((resolve, reject) => {
+  syscallReqId++;
+  pendingRequests.set(syscallReqId, { resolve, reject });
+  globalThis.parent.postMessage({ type: "syscall", id: syscallReqId, name, args }, "*");
+});
+let oldHeight, heightChecks = 0;
+globalThis.addEventListener("message", (message) => {
+  const data = message.data;
+  switch (data.type) {
+    case "html":
+      document.body.innerHTML = data.html;
+      if (data.theme) document.documentElement.setAttribute("data-theme", data.theme);
+      if (data.script) { try { eval(data.script); } catch (e) { console.error("Error evaling script", e); } }
+      setTimeout(() => { oldHeight = undefined; heightChecks = 0; updateHeight(); });
+      break;
+    case "syscall-response": {
+      const lookup = pendingRequests.get(data.id);
+      pendingRequests.delete(data.id);
+      if (data.error) lookup.reject(new Error(data.error)); else lookup.resolve(data.result);
+    } break;
+  }
+});
+function updateHeight() {
+  const height = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+  heightChecks++;
+  if (height !== oldHeight) { oldHeight = height; globalThis.parent.postMessage({ type: "setHeight", height }); }
+  if (heightChecks < 25) setTimeout(updateHeight, 100);
+}
+<\/script></head><body></body></html>`;
+
+// The "page" the widget lives on, for editor.getText / editor.replaceRange.
+harness.pageText = "# Page\n\n```canvas\nurl: test.canvas\nheight: 300px\n```\n\nAfter.";
+
+async function bootWidget() {
+  const { css, script } = await (await fetch("widget.json")).json();
+  const body = "url: test.canvas\nheight: 300px";
+  const html = `<style>${css}</style><div id="canvas-widget" class="cv-widget" style="height:300px" data-path="test.canvas" data-page="Page" data-body="${body.replace(/"/g, "&quot;")}"></div>`;
+  const frame = document.createElement("iframe");
+  frame.src = "about:blank";
+  const loaded = new Promise((resolve) => frame.onload = resolve);
+  document.getElementById("widgethost").appendChild(frame);
+  await loaded;
+  frame.contentDocument.write(PANEL);
+  frame.contentDocument.close();
+  window.addEventListener("message", async (event) => {
+    if (event.source !== frame.contentWindow) return;
+    const data = event.data;
+    if (data.type === "setHeight") { frame.style.height = data.height + "px"; harness.widgetHeight = data.height; }
+    if (data.type === "syscall") {
+      let result;
+      try {
+        if (data.name === "editor.getText") result = { result: harness.pageText };
+        else if (data.name === "editor.replaceRange") {
+          const [from, to, insert] = data.args;
+          harness.pageText = harness.pageText.slice(0, from) + insert + harness.pageText.slice(to);
+          log("replaceRange ->", JSON.stringify(insert));
+          result = { result: undefined };
+        } else result = { result: await syscall(data.name, data.args) };
+      } catch (error) { result = { error: error.message }; }
+      frame.contentWindow.postMessage({ type: "syscall-response", id: data.id, ...result }, "*");
+    }
+  });
+  frame.contentWindow.postMessage({ type: "html", html, script, theme: document.documentElement.getAttribute("data-theme") }, "*");
+  harness.widgetFrame = frame;
+}
+
+boot().then(bootWidget);
 </script>
 </body>
 </html>

@@ -19,6 +19,8 @@
   --cv-ui-font: var(--ui-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
   --cv-text-font: var(--editor-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
   --cv-mono-font: var(--editor-monospace-font, ui-monospace, Menlo, monospace);
+  /* Rendered cards and the card editor share one size so editing doesn't reflow. */
+  --cv-card-font-size: 15px;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -38,6 +40,8 @@
 
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--cv-bg); }
 body { color: var(--cv-fg); font-family: var(--cv-ui-font); font-size: 14px; }
+/* Code widget iframes size themselves to the body, so the embed must not fill it. */
+html:has(#canvas-widget), body:has(> #canvas-widget) { height: auto; overflow: visible; background: transparent; }
 
 .cv-root { position: relative; width: 100%; height: 100%; overflow: hidden; user-select: none; -webkit-user-select: none; }
 .cv-viewport {
@@ -123,7 +127,7 @@ body { color: var(--cv-fg); font-family: var(--cv-ui-font); font-size: 14px; }
 .cv-editing { outline: 2px solid var(--cv-accent); outline-offset: 3px; }
 
 /* ---- markdown ---- */
-.cv-markdown { font-family: var(--cv-text-font); font-size: 15px; line-height: 1.5; overflow-wrap: break-word; }
+.cv-markdown { font-family: var(--cv-text-font); font-size: var(--cv-card-font-size); line-height: 1.5; overflow-wrap: break-word; }
 .cv-markdown > :first-child { margin-top: 0; }
 .cv-markdown > :last-child { margin-bottom: 0; }
 .cv-markdown p, .cv-markdown ul, .cv-markdown ol, .cv-markdown pre, .cv-markdown blockquote, .cv-markdown table { margin: 0 0 0.6em; }
@@ -204,3 +208,56 @@ body { color: var(--cv-fg); font-family: var(--cv-ui-font); font-size: 14px; }
   .cv-bar button { min-width: 36px; height: 36px; }
   .cv-toolbar { bottom: 10px; max-width: calc(100% - 20px); overflow-x: auto; }
 }
+
+/* ---- card editor (CodeMirror, SilverBullet class names) ----
+   SilverBullet's own editor rules are mirrored in rescoped to .cv-sb; the rules
+   below hold the canvas-specific geometry and act as fallbacks standalone. */
+.cv-node .cv-cardeditor { padding: 0; overflow: hidden; user-select: text; -webkit-user-select: text; }
+.cv-node .cv-cardeditor .cm-editor { height: 100%; font-size: var(--cv-card-font-size); background: transparent; outline: none; }
+.cv-node .cv-cardeditor .cm-editor .cm-scroller { overflow: auto; font-family: var(--cv-text-font); line-height: 1.5; }
+.cv-node .cv-cardeditor .cm-editor .cm-content { max-width: none; margin: 0; padding: 10px 16px; caret-color: var(--editor-caret-color, var(--cv-fg)); }
+.cv-node .cv-cardeditor .cm-editor .cm-line { padding: 0; }
+.cv-cm .cm-selectionBackground, .cv-cm.cm-focused .cm-selectionBackground { background: var(--editor-selection-background-color, color-mix(in srgb, var(--cv-accent) 25%, transparent)) !important; }
+.cv-cm .cm-cursor { border-left-color: var(--editor-caret-color, var(--cv-fg)); }
+.cv-sb .sb-line-h1 { font-size: 1.6em; font-weight: 700; }
+.cv-sb .sb-line-h2 { font-size: 1.35em; font-weight: 700; }
+.cv-sb .sb-line-h3 { font-size: 1.15em; font-weight: 700; }
+.cv-sb .sb-line-h4, .cv-sb .sb-line-h5, .cv-sb .sb-line-h6 { font-weight: 700; }
+.cv-sb .sb-strong { font-weight: 700; }
+.cv-sb .sb-emphasis { font-style: italic; }
+.cv-sb .sb-strikethrough { text-decoration: line-through; }
+.cv-sb .sb-highlight { background: var(--highlight-color, rgba(255, 255, 0, 0.5)); }
+.cv-sb .sb-code { font-family: var(--cv-mono-font); font-size: 0.9em; background: var(--cv-code-bg); border-radius: 4px; }
+.cv-sb .sb-meta { color: var(--meta-subtle-color, var(--cv-subtle)); }
+.cv-sb .sb-link, .cv-sb .sb-wiki-link, .cv-sb .sb-wiki-link-page { color: var(--cv-link); }
+.cv-sb [data-page], .cv-sb [data-href] { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.cv-sb .sb-url { color: var(--cv-subtle); }
+.cv-sb .sb-hashtag { background: var(--cv-tag-bg); color: var(--cv-tag-fg); border-radius: 6px; padding: 0 4px; }
+.cv-sb .sb-line-blockquote { border-left: 3px solid var(--cv-border); padding-left: 10px !important; color: var(--cv-subtle); }
+.cv-sb .cv-line-code { font-family: var(--cv-mono-font); font-size: 0.9em; background: var(--cv-code-bg); }
+.cv-sb .cv-bullet { color: var(--editor-list-bullet-color, var(--cv-subtle)); padding-right: 0.15em; }
+.cv-sb .cv-task-box { margin: 0 4px 0 0; vertical-align: -1px; cursor: pointer; }
+.cv-sb .cv-callout-label { font-weight: 600; color: var(--cv-accent); }
+.cv-sb .cv-hr { display: inline-block; width: 100%; border-top: 1px solid var(--cv-border); vertical-align: middle; }
+.cv-editing .cv-cardeditor { background: var(--cv-card); border-radius: 8px; }
+.cv-colored.cv-editing .cv-cardeditor { background: color-mix(in srgb, var(--cv-color) 9%, var(--cv-card)); }
+
+/* ---- embedded preview (code widget) ---- */
+.cv-widget {
+  position: relative; box-sizing: border-box; min-height: 120px; overflow: hidden;
+  border: 1px solid var(--cv-border); border-radius: 8px; background: var(--cv-bg);
+}
+.cv-widget-canvas { position: absolute; inset: 0; }
+.cv-viewer .cv-toolbar, .cv-viewer .cv-seltools { display: none; }
+.cv-locked .cv-viewport { touch-action: auto; cursor: default; }
+.cv-locked .cv-node:hover > .cv-connector { opacity: 0; }
+.cv-widget-bar { top: 8px; right: 8px; padding: 2px; opacity: 0.75; transition: opacity 0.15s; }
+.cv-widget:hover .cv-widget-bar { opacity: 1; }
+.cv-widget-bar button { min-width: 28px; height: 28px; }
+.cv-widget-resize {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 10px; cursor: ns-resize; z-index: 12;
+  display: flex; align-items: center; justify-content: center;
+}
+.cv-widget-resize::after { content: ""; width: 36px; height: 4px; border-radius: 2px; background: var(--cv-border); opacity: 0; transition: opacity 0.15s; }
+.cv-widget:hover .cv-widget-resize::after, .cv-resizing .cv-widget-resize::after { opacity: 1; }
+.cv-resizing, .cv-resizing * { cursor: ns-resize !important; user-select: none; }

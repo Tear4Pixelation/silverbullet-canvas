@@ -1,6 +1,6 @@
 # silverbullet-canvas
 
-A small, fast editor for [JSON Canvas](https://jsoncanvas.org) (`.canvas`) files, shipped as a [SilverBullet](https://silverbullet.md) plug. It is Obsidian-compatible and has no framework dependency: about 20 kB gzipped, with JS and CSS together.
+A fast editor for [JSON Canvas](https://jsoncanvas.org) (`.canvas`) files, shipped as a [SilverBullet](https://silverbullet.md) plug. It is Obsidian-compatible and has no UI framework. The only dependency is CodeMirror, for editing Markdown inside cards. Read-only previews ship without it.
 
 ## Install
 
@@ -17,6 +17,8 @@ There's also a standalone version, `canvas-editor.html`, attached to the [edge r
 ## Features
 
 * Text (Markdown), file, link and group nodes. Edges have sides, arrow ends, colors and labels.
+* Cards are Markdown, edited in place with SilverBullet-style live preview (CodeMirror). Tokens use SilverBullet's own CSS classes and its editor styles are mirrored in, including your Space Style.
+* Read-only previews on any page through a ```` ```canvas ```` block or `canvas.render()` in Lua. They have scroll lock, zoom to fit, an open-in-editor button and drag-to-resize.
 * Drag, resize, grid snap, box select, group drag, copy/paste, duplicate and undo/redo.
 * File nodes show page previews and images from your space. Wiki links navigate within SilverBullet.
 * The theme follows SilverBullet: its live CSS variables and fonts are mirrored, light and dark.
@@ -41,9 +43,14 @@ npm run build        # editor bundle + dist/canvas-editor.html + canvas.plug.js
 npm test             # round-trip, history and sanitizer tests
 ```
 
-`dist/harness.html` loads the plug's editor the way SilverBullet's document-editor host does: the same `srcdoc` iframe, bridge shim, `file-open`/`request-save`/`file-saved`, syscalls and theme messages. Use it for testing without a server. Serve `dist/` with any static server.
+`dist/harness.html` loads the plug's editor and preview the way SilverBullet hosts them. Use it for testing without a server. Serve `dist/` with any static server.
+* The editor uses the document-editor `srcdoc` iframe with its bridge shim, `file-open`/`request-save`/`file-saved`, syscalls and theme messages.
+* The preview uses the code-widget sandbox, with `globalThis.syscall` and `setHeight`.
 
-Layout: `editor/src/` holds the framework-free TypeScript editor. `canvas.ts` and `canvas.plug.yaml` are the plug. `build.mjs` inlines the bundled editor into the plug.
+Layout:
+* `editor/src/` holds the TypeScript sources. `main.ts` is the document editor, `widget.ts` the preview, and `cardeditor.ts` the CodeMirror card editor.
+* `canvas.ts` and `canvas.plug.yaml` are the plug.
+* `build.mjs` bundles both and inlines them into the plug.
 
 ## License
 

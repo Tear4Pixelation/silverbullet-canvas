@@ -1,9 +1,13 @@
 name: canvas
-version: 0.1.0
+version: 0.2.0
 functions:
   canvasEditor:
     path: ./canvas.ts:canvasEditor
     editor: ["canvas"]
+
+  canvasWidget:
+    path: ./canvas.ts:showWidget
+    codeWidget: canvas
 
   newCanvas:
     path: ./canvas.ts:newCanvas
@@ -11,8 +15,26 @@ functions:
       name: "Canvas: New"
       requireMode: rw
 
+  embedCanvas:
+    path: ./canvas.ts:embedCanvas
+    command:
+      name: "Canvas: Embed"
+      requireMode: rw
+
   canvasSlashCommand:
     path: ./canvas.ts:insertNewCanvas
     slashCommand:
       name: canvas
-      description: Create a JSON Canvas and link it here
+      description: Create a canvas and embed a preview here
+
+  canvasEmbedSlashCommand:
+    path: ./canvas.ts:embedCanvas
+    slashCommand:
+      name: canvas-embed
+      description: Embed a preview of an existing canvas
+
+  canvasLinkSlashCommand:
+    path: ./canvas.ts:linkNewCanvas
+    slashCommand:
+      name: canvas-link
+      description: Create a canvas and link to it

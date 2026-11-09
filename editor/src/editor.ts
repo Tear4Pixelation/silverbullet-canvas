@@ -4,8 +4,37 @@ import type { Point, Rect } from "./geometry.ts";
 import { boundsOf, contains, curve, edgeGeometry, intersects, nearestSide, normal, sidePoint } from "./geometry.ts";
 import { History } from "./history.ts";
 import type { Host } from "./host.ts";
-import { escapeHtml, renderMarkdown } from "./markdown.ts";
+import { escapeHtml, renderMarkdown, toggleTask } from "./markdown.ts";
 import { icon } from "./icons.ts";
+// Type-only, so the viewer bundle doesn't pull in CodeMirror.
+import type { CardEditor, CardEditorCallbacks, CardEditorFactory } from "./cardeditor.ts";
+
+export interface EditorOptions {
+  // Markdown editor used inside text cards; a plain textarea when absent.
+  createCardEditor?: CardEditorFactory;
+  // Read-only embed: no toolbar, no document-wide listeners, scroll lock.
+  viewer?: boolean;
+}
+
+const createTextareaEditor: CardEditorFactory = (parent, text, callbacks) => {
+  const textarea = document.createElement("textarea");
+  textarea.className = "cv-textarea";
+  textarea.value = text;
+  textarea.spellcheck = true;
+  parent.appendChild(textarea);
+  textarea.addEventListener("blur", () => callbacks.finish());
+  textarea.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) {
+      event.preventDefault();
+      callbacks.finish();
+    }
+  });
+  return {
+    getText: () => textarea.value,
+    focus: () => { textarea.focus(); textarea.setSelectionRange(text.length, text.length); },
+    destroy: () => textarea.remove(),
+  };
+};
 
 const GRID = 20;
 const MIN_ZOOM = 0.05;
@@ -74,7 +103,9 @@ export class CanvasEditor {
   // Cached so render passes never read layout (reads after style writes force reflow).
   private viewportSize = { width: 0, height: 0 };
   private frameVisibleRect: Rect | null = null;
-  private editing: { id: string; textarea: HTMLTextAreaElement; isNew: boolean } | null = null;
+  private editing: { id: string; editor: CardEditor; isNew: boolean } | null = null;
+  private locked = false;
+  private teardown: (() => void)[] = [];
   private clipboard: { nodes: CanvasNode[]; edges: CanvasEdge[] } | null = null;
   private fileCache = new Map<string, Promise<string | null>>();
 
@@ -91,8 +122,9 @@ export class CanvasEditor {
   private zoomLabel!: HTMLElement;
   private emptyHint: HTMLElement;
 
-  constructor(private root: HTMLElement, private host: Host) {
+  constructor(private root: HTMLElement, private host: Host, private options: EditorOptions = {}) {
     root.classList.add("cv-root");
+    root.classList.toggle("cv-viewer", !!options.viewer);
     root.innerHTML = "";
     this.viewport = div("cv-viewport", root);
     this.viewport.tabIndex = 0;
@@ -120,7 +152,7 @@ export class CanvasEditor {
     this.original = text;
     this.dirty = false;
     this.history.reset();
-    this.readOnly = await this.host.readOnly();
+    this.readOnly = this.options.viewer || await this.host.readOnly();
     this.root.classList.toggle("cv-readonly", this.readOnly);
     this.fileCache.clear();
     for (const id of [...this.selection]) if (!this.data.nodes.some((node) => node.id === id) && !this.data.edges.some((edge) => edge.id === id)) this.selection.delete(id);
@@ -473,7 +505,8 @@ export class CanvasEditor {
     while (gridSize < 10) gridSize *= 5;
     this.viewport.style.backgroundSize = `${gridSize}px ${gridSize}px`;
     this.viewport.style.backgroundPosition = `${x}px ${y}px`;
-    this.root.classList.toggle("cv-lod", zoom < LOD_ZOOM);
+    // Low detail only pays off on big canvases; small ones stay readable when zoomed out.
+    this.root.classList.toggle("cv-lod", zoom < LOD_ZOOM && this.data.nodes.length >= CULL_THRESHOLD);
     this.root.classList.toggle("cv-nogrid", zoom < 0.2);
     if (this.zoomLabel) this.zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
     this.cull();
@@ -496,7 +529,7 @@ export class CanvasEditor {
   // Hide far off-screen nodes on big canvases; the browser then skips their layout and paint.
   private cull() {
     const visibleRect = this.frameVisibleRect;
-    const detailed = this.view.zoom >= LOD_ZOOM;
+    const detailed = !visibleRect || this.view.zoom >= LOD_ZOOM;
     for (const node of this.data.nodes) {
       const element = this.nodeEls.get(node.id);
       if (!element) continue;
@@ -756,29 +789,28 @@ export class CanvasEditor {
     this.cancelEditing(true);
     const node = this.nodeById.get(id);
     if (!node || node.type !== "text") return;
-    this.render(); // make sure the element exists
-    const element = this.nodeEls.get(id)!;
-    const textarea = document.createElement("textarea");
-    textarea.className = "cv-textarea";
-    textarea.value = node.text ?? "";
-    textarea.spellcheck = true;
-    element.querySelector(".cv-content")?.replaceWith(textarea);
-    element.classList.add("cv-editing");
-    this.editing = { id, textarea, isNew };
     this.selection = new Set([id]);
-    this.selectionDirty = true;
-    this.requestRender();
-    textarea.addEventListener("blur", () => this.finishEditing());
-    textarea.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" || (event.key === "Enter" && (event.ctrlKey || event.metaKey))) {
-        event.preventDefault();
+    this.render(); // make sure the element exists and is visible
+    const element = this.nodeEls.get(id)!;
+    const host = document.createElement("div");
+    host.className = "cv-content cv-cardeditor cv-sb";
+    element.querySelector(".cv-content")?.replaceWith(host);
+    element.classList.add("cv-editing");
+    const callbacks: CardEditorCallbacks = {
+      // Deferred: finishing destroys the editor, which must not happen inside its own handlers.
+      finish: () => queueMicrotask(() => {
+        if (this.editing?.editor !== editor) return;
         this.finishEditing();
         this.focus();
-      }
-      event.stopPropagation();
-    });
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }),
+      navigate: (page) => this.host.navigate(page),
+      openUrl: (url) => this.host.openUrl(url),
+    };
+    const editor = (this.options.createCardEditor ?? createTextareaEditor)(host, node.text ?? "", callbacks);
+    this.editing = { id, editor, isNew };
+    this.selectionDirty = true;
+    this.requestRender();
+    editor.focus();
   }
 
   private finishEditing() { this.cancelEditing(true); }
@@ -787,13 +819,14 @@ export class CanvasEditor {
     const editing = this.editing;
     if (!editing) return;
     this.editing = null;
+    const text = editing.editor.getText();
+    editing.editor.destroy();
     const node = this.nodeById.get(editing.id);
     const element = this.nodeEls.get(editing.id);
     element?.classList.remove("cv-editing");
     this.contentKeys.delete(editing.id);
     this.dirtyNodes.add(editing.id);
     if (commit && node) {
-      const text = editing.textarea.value;
       if (editing.isNew && !text.trim()) {
         this.transact(() => this.removeObjects(new Set([node.id])));
       } else if (text !== (node.text ?? "")) {
@@ -900,8 +933,10 @@ export class CanvasEditor {
     viewport.addEventListener("dblclick", (event) => this.onDoubleClick(event));
     viewport.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
     // Links are handled on pointerup; never let the iframe navigate itself.
-    document.addEventListener("click", (event) => {
-      if ((event.target as Element).closest?.("a")) event.preventDefault();
+    this.root.addEventListener("click", (event) => {
+      const target = event.target as Element;
+      // Rendered task boxes are toggled through the model (pointerdown), never natively.
+      if (target.closest?.("a") || target.closest?.(".cv-text .cv-content .cv-task-box")) event.preventDefault();
     }, true);
     viewport.addEventListener("contextmenu", (event) => { if (!isTextInput(event.target)) event.preventDefault(); });
     this.toolbar.addEventListener("click", (event) => {
@@ -913,32 +948,84 @@ export class CanvasEditor {
       const button = (event.target as Element).closest<HTMLElement>("[data-act]");
       if (button) this.selectionAction(button);
     });
-    window.addEventListener("keydown", (event) => this.onKeyDown(event));
-    window.addEventListener("keyup", (event) => { if (event.key === " ") { this.spaceHeld = false; this.root.classList.remove("cv-panning"); } });
-    window.addEventListener("blur", () => { this.spaceHeld = false; });
-    document.addEventListener("paste", (event) => this.handlePaste(event));
-    document.addEventListener("copy", (event) => {
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1].contentRect;
+      this.viewportSize = { width: box.width, height: box.height };
+      // A locked embed always shows the whole canvas.
+      if (this.pendingFit || (this.options.viewer && this.locked)) this.zoomToFit(false);
+      this.viewDirty = true;
+      this.requestRender();
+    });
+    observer.observe(viewport);
+    this.teardown.push(() => observer.disconnect());
+    // An embed shares its page with others: keys and clipboard stay with the full editor.
+    if (this.options.viewer) return;
+
+    const listen = <K extends string>(target: EventTarget, type: K, handler: (event: any) => void) => {
+      target.addEventListener(type, handler);
+      this.teardown.push(() => target.removeEventListener(type, handler));
+    };
+    listen(window, "keydown", (event: KeyboardEvent) => this.onKeyDown(event));
+    listen(window, "keyup", (event: KeyboardEvent) => { if (event.key === " ") { this.spaceHeld = false; this.root.classList.remove("cv-panning"); } });
+    listen(window, "blur", () => { this.spaceHeld = false; });
+    listen(document, "paste", (event: ClipboardEvent) => this.handlePaste(event));
+    listen(document, "copy", (event: ClipboardEvent) => {
       if (this.editing || isTextInput(event.target)) return;
       const json = this.copySelection();
       if (json) { event.clipboardData?.setData("text/plain", json); event.preventDefault(); }
     });
-    document.addEventListener("cut", (event) => {
+    listen(document, "cut", (event: ClipboardEvent) => {
       if (this.editing || isTextInput(event.target) || this.readOnly) return;
       const json = this.copySelection();
       if (json) { event.clipboardData?.setData("text/plain", json); event.preventDefault(); this.deleteSelection(); }
     });
-    new ResizeObserver((entries) => {
-      const box = entries[entries.length - 1].contentRect;
-      this.viewportSize = { width: box.width, height: box.height };
-      if (this.pendingFit) this.zoomToFit(false);
-      this.viewDirty = true;
-      this.requestRender();
-    }).observe(viewport);
+  }
+
+  // ---------- embed (viewer) controls ----------
+
+  // Locked: scrolling and dragging go to the page, links stay clickable.
+  setLocked(locked: boolean) {
+    this.locked = locked;
+    this.root.classList.toggle("cv-locked", locked);
+    if (locked) {
+      this.selection.clear();
+      this.selectionDirty = true;
+      this.zoomToFit(false);
+    }
+  }
+
+  isLocked() { return this.locked; }
+
+  destroy() {
+    this.cancelEditing(true);
+    for (const undo of this.teardown) undo();
+    this.teardown = [];
+    cancelAnimationFrame(this.frame);
   }
 
   private onPointerDown(event: PointerEvent) {
     const target = event.target as Element;
-    if (isTextInput(target)) return;
+    // Ticking a task on a rendered card edits the card directly, like in SilverBullet.
+    const taskBox = target.closest<HTMLInputElement>(".cv-text .cv-task-box");
+    if (taskBox && !taskBox.closest(".cv-cardeditor")) {
+      event.preventDefault();
+      const nodeElement = taskBox.closest<HTMLElement>(".cv-node")!;
+      const node = this.nodeById.get(nodeElement.dataset.id!);
+      if (node && !this.readOnly) {
+        const index = Array.from(nodeElement.querySelectorAll(".cv-task-box")).indexOf(taskBox);
+        const text = toggleTask(node.text ?? "", index);
+        if (text !== null) this.transact(() => { this.touchNode(node); node.text = text; });
+      }
+      return;
+    }
+    if (isTextInput(target) || target.closest(".cv-cardeditor")) return;
+    if (this.locked) {
+      // Only link clicks; the page handles scrolling and touch panning.
+      const link = target.closest<HTMLElement>("a, .cv-file-title, .cv-wikilink");
+      const nodeElement = target.closest<HTMLElement>(".cv-node");
+      if (event.button === 0 && link && nodeElement) this.followLink(link, nodeElement.dataset.id!);
+      return;
+    }
     const screen = this.screenPoint(event);
     this.pointers.set(event.pointerId, screen);
     this.lastPointer = this.toWorld(event.clientX, event.clientY);
@@ -1254,6 +1341,7 @@ export class CanvasEditor {
   }
 
   private onDoubleClick(event: MouseEvent) {
+    if (this.locked) return;
     // Pointer capture retargets dblclick to the viewport; look up what is really under the pointer.
     const target = document.elementFromPoint(event.clientX, event.clientY) ?? (event.target as Element);
     if (isTextInput(target)) return;
@@ -1278,9 +1366,10 @@ export class CanvasEditor {
   }
 
   private onWheel(event: WheelEvent) {
+    if (this.locked) return; // the page scrolls
     const target = event.target as Element;
-    // Let selected cards scroll their own content.
-    const content = target.closest<HTMLElement>(".cv-selected .cv-content, .cv-textarea");
+    // Let selected cards (and the card editor) scroll their own content.
+    const content = target.closest<HTMLElement>(".cm-scroller, .cv-textarea, .cv-selected .cv-content");
     if (content && !event.ctrlKey && !event.metaKey && content.scrollHeight > content.clientHeight + 1) return;
     event.preventDefault();
     const rect = this.viewport.getBoundingClientRect();

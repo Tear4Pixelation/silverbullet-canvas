@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { parseCanvas, serializeCanvas } from "../editor/src/model.ts";
 import { History } from "../editor/src/history.ts";
-import { renderMarkdown } from "../editor/src/markdown.ts";
+import { renderMarkdown, toggleTask } from "../editor/src/markdown.ts";
 
 const demo = readFileSync(new URL("../editor/demo.canvas", import.meta.url), "utf8");
 
@@ -97,4 +97,14 @@ test("markdown output is sanitized", () => {
   assert.match(renderMarkdown("[[Some Page|alias]]"), /data-page="Some Page">alias</);
   assert.match(renderMarkdown("- [x] done\n- [ ] todo"), /checked/);
   assert.match(renderMarkdown("**b** and *i* and `c`"), /<strong>b<\/strong> and <em>i<\/em> and <code>c<\/code>/);
+});
+
+test("toggling a rendered task flips the matching source line", () => {
+  const source = "- [ ] one\n```\n- [ ] not a task\n```\n> - [x] quoted\n1. [ ] numbered";
+  const rendered = renderMarkdown(source);
+  assert.equal((rendered.match(/cv-task-box/g) ?? []).length, 3);
+  assert.equal(toggleTask(source, 0), source.replace("- [ ] one", "- [x] one"));
+  assert.equal(toggleTask(source, 1), source.replace("> - [x] quoted", "> - [ ] quoted"));
+  assert.equal(toggleTask(source, 2), source.replace("1. [ ] numbered", "1. [x] numbered"));
+  assert.equal(toggleTask(source, 3), null);
 });

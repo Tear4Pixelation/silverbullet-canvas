@@ -149,7 +149,7 @@ function render(source: string): string {
       }
       const task = /^\[([ xX])\]\s+(.*)$/.exec(item[3]);
       out.push(task
-        ? `<input type="checkbox" disabled${task[1] === " " ? "" : " checked"}> ${inline(task[2])}`
+        ? `<input type="checkbox" class="cv-task-box"${task[1] === " " ? "" : " checked"}> ${inline(task[2])}`
         : inline(item[3]));
       continue;
     }
@@ -166,4 +166,27 @@ function render(source: string): string {
 function unescape(text: string): string {
   return text.replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) =>
     ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[entity as "amp"]);
+}
+
+// Flips the index-th task checkbox (in rendering order) in the source text.
+// Fenced code is skipped, matching what renderMarkdown turns into checkboxes.
+export function toggleTask(source: string, index: number): string | null {
+  const lines = source.split("\n");
+  let fence: string | null = null;
+  let seen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const fenceMatch = /^\s*(```|~~~)/.exec(lines[i]);
+    if (fenceMatch) {
+      if (!fence) fence = fenceMatch[1]; else if (fenceMatch[1] === fence) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const task = /^(\s*(?:>\s?)*\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\]\s)/.exec(lines[i]);
+    if (!task) continue;
+    if (seen++ === index) {
+      lines[i] = task[1] + (task[2] === " " ? "x" : " ") + lines[i].slice(task[1].length + 1);
+      return lines.join("\n");
+    }
+  }
+  return null;
 }

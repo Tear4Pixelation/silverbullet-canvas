@@ -1,4 +1,6 @@
 import { CanvasEditor } from "./editor.ts";
+import { createCardEditor } from "./cardeditor.ts";
+import { mirrorHostTheme } from "./theme.ts";
 import { silverBulletHost, silverbullet, standaloneHost } from "./host.ts";
 import { escapeHtml } from "./markdown.ts";
 import { icon } from "./icons.ts";
@@ -21,53 +23,10 @@ function showError(message: string | null) {
   overlay.innerHTML = `<strong>Could not open this canvas</strong><span>${escapeHtml(message)}</span><span>The file was left untouched.</span>`;
 }
 
-// SilverBullet's document-editor iframe is same-origin (srcdoc), so the host's
-// live CSS variables and @font-face rules can be mirrored for a native look.
-function mirrorHostTheme() {
-  let hostDocument: Document;
-  try {
-    hostDocument = window.parent.document;
-    if (!hostDocument || window.parent === window) return;
-  } catch {
-    return;
-  }
-  const sync = () => {
-    const hostRoot = hostDocument.documentElement;
-    const computed = window.parent.getComputedStyle(hostRoot);
-    const style = document.documentElement.style;
-    for (let i = 0; i < computed.length; i++) {
-      const name = computed[i];
-      if (name.startsWith("--")) style.setProperty(name, computed.getPropertyValue(name));
-    }
-    const theme = hostRoot.getAttribute("data-theme");
-    if (theme) document.documentElement.setAttribute("data-theme", theme);
-  };
-  sync();
-  new MutationObserver(() => setTimeout(sync, 0)).observe(hostDocument.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
-
-  const fontRules: string[] = [];
-  for (const sheet of Array.from(hostDocument.styleSheets)) {
-    let rules: CSSRuleList;
-    try { rules = sheet.cssRules; } catch { continue; }
-    const base = sheet.href ?? hostDocument.baseURI;
-    for (const rule of Array.from(rules)) {
-      if (rule.constructor.name !== "CSSFontFaceRule") continue;
-      fontRules.push(rule.cssText.replace(/url\((['"]?)([^'")]+)\1\)/g, (match, _quote, url) => {
-        try { return `url("${new URL(url, base).href}")`; } catch { return match; }
-      }));
-    }
-  }
-  if (fontRules.length) {
-    const style = document.createElement("style");
-    style.textContent = fontRules.join("\n");
-    document.head.appendChild(style);
-  }
-}
-
 function bootSilverBullet(root: HTMLElement) {
   const sb = silverbullet()!;
-  mirrorHostTheme();
-  const editor = new CanvasEditor(root, silverBulletHost(sb));
+  mirrorHostTheme(true);
+  const editor = new CanvasEditor(root, silverBulletHost(sb), { createCardEditor });
   (window as any).canvasEditor = editor; // for debugging from the devtools console
   let currentPath: string | null = null;
   let broken: Uint8Array | null = null;
@@ -107,7 +66,7 @@ function bootStandalone(root: HTMLElement) {
   let fileHandle: any = null;
   let fileName = "demo.canvas";
   let unsaved = false;
-  const editor = new CanvasEditor(root, standaloneHost(() => { unsaved = true; updateName(); }));
+  const editor = new CanvasEditor(root, standaloneHost(() => { unsaved = true; updateName(); }), { createCardEditor });
 
   const bar = document.createElement("div");
   bar.className = "cv-bar cv-standalone-bar";
