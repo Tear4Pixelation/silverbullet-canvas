@@ -10,7 +10,7 @@
     "build:plug": "plug-compile canvas.plug.yaml",
     "build": "npm run build:editor && npm run build:plug",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.ts"
   },
   "devDependencies": {
     "@silverbulletmd/silverbullet": "^2.12.0",
