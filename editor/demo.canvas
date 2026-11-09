@@ -1,0 +1,17 @@
+{
+	"nodes":[
+		{"id":"8a9b2c3d4e5f6a7b","type":"group","x":-460,"y":-300,"width":1000,"height":620,"color":"5","label":"JSON Canvas in SilverBullet"},
+		{"id":"1f2e3d4c5b6a7980","type":"text","text":"# Welcome 👋\n\nThis is a **lightweight** JSON Canvas editor.\n\n- Double-click empty space to add a card\n- Drag the dots on a card's edge to connect\n- `Shift`-drag to box-select\n- `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo","x":-420,"y":-240,"width":420,"height":300,"color":"4"},
+		{"id":"2a3b4c5d6e7f8091","type":"text","text":"## Markdown\n\n*Italic*, **bold**, ~~strike~~, ==highlight==, `code`, #tag\n\n> [!note] Callouts\n> work too\n\n- [x] task lists\n- [ ] [[Wiki links]] open pages","x":80,"y":-240,"width":420,"height":300},
+		{"id":"3b4c5d6e7f809a1b","type":"link","url":"https://jsoncanvas.org","x":-420,"y":120,"width":420,"height":140,"color":"6"},
+		{"id":"4c5d6e7f809a1b2c","type":"file","file":"index.md","x":80,"y":120,"width":420,"height":140},
+		{"id":"5d6e7f809a1b2c3d","type":"text","text":"Unknown properties survive a save, so Obsidian keeps working.","x":620,"y":-120,"width":300,"height":120,"color":"#d16bd4","customPluginData":{"keep":true,"nested":[1,2,3]}}
+	],
+	"edges":[
+		{"id":"e1a2b3c4d5e6f708","fromNode":"1f2e3d4c5b6a7980","fromSide":"right","toNode":"2a3b4c5d6e7f8091","toSide":"left","label":"styled with"},
+		{"id":"e2b3c4d5e6f70819","fromNode":"1f2e3d4c5b6a7980","fromSide":"bottom","toNode":"3b4c5d6e7f809a1b","toSide":"top","color":"6"},
+		{"id":"e3c4d5e6f708192a","fromNode":"2a3b4c5d6e7f8091","fromSide":"bottom","toNode":"4c5d6e7f809a1b2c","toSide":"top","fromEnd":"arrow","toEnd":"arrow"},
+		{"id":"e4d5e6f708192a3b","fromNode":"2a3b4c5d6e7f8091","fromSide":"right","toNode":"5d6e7f809a1b2c3d","toSide":"left","toEnd":"none","color":"2","weight":3}
+	],
+	"metadata":{"version":"1.0-1.0","frontmatter":{}}
+}

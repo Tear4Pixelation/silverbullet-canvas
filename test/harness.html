@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<!-- Mimics SilverBullet's IFrameDocumentEditor host (client/document_editor.ts and
+     client/document_editor_js.ts in silverbulletmd/silverbullet) for testing the
+     plug's editor HTML without a server. -->
+<html data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>SB host harness</title>
+<style>
+  html { --root-background-color: #fff; --root-color: #20252d; --ui-accent-color: #3569b8; --ui-font: Georgia, serif; --editor-font: Georgia, serif; }
+  html[data-theme="dark"] { --root-background-color: #1e1e22; --root-color: #d6d6d6; --ui-accent-color: #e0a040; --ui-surface-border-color: #44444c; --modal-background-color: #2a2a30; }
+  body { margin: 0; display: flex; flex-direction: column; height: 100vh; background: var(--root-background-color); color: var(--root-color); font: 13px system-ui; }
+  #bar { padding: 6px; display: flex; gap: 6px; align-items: center; }
+  #host { flex: 1; position: relative; }
+  #host iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #log { height: 90px; overflow: auto; font: 11px monospace; padding: 4px 6px; border-top: 1px solid #555; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="theme">Toggle theme</button>
+  <button id="external">External edit</button>
+  <button id="save">Force save</button>
+  <span id="status"></span>
+</div>
+<div id="host"></div>
+<div id="log"></div>
+<script>
+const SHIM = `
+const pendingRequests = new Map();
+let requestID = 0;
+globalThis.silverbullet = new EventTarget();
+globalThis.silverbullet.syscall = (name, ...args) => {
+  const promise = Promise.withResolvers();
+  pendingRequests.set(++requestID, { ...promise });
+  globalThis.parent.postMessage({ type: "syscall", data: { id: requestID, name, args } }, "*");
+  return promise.promise;
+};
+globalThis.addEventListener("message", (message) => {
+  const response = message.data, data = message.data.data;
+  if (!response.internal) {
+    globalThis.silverbullet.dispatchEvent(new CustomEvent(response.type, { detail: data }));
+    return;
+  }
+  switch (response.type) {
+    case "syscall-response": {
+      const request = pendingRequests.get(data.id);
+      pendingRequests.delete(data.id);
+      if (data.error) request.reject(new Error(data.error)); else request.resolve(data.result);
+    } break;
+    case "set-theme": document.querySelector("html").setAttribute("data-theme", data.theme); break;
+  }
+});
+globalThis.silverbullet.sendMessage = (type, data) => { globalThis.parent.postMessage({ type, data }, "*"); };
+globalThis.addEventListener("keydown", (event) => {
+  const keyEvent = new KeyboardEvent("keydown", event);
+  Object.defineProperty(keyEvent, "target", { value: globalThis.parent.document.body });
+  globalThis.parent.document.dispatchEvent(keyEvent);
+  if (keyEvent.defaultPrevented) { event.preventDefault(); event.stopPropagation(); }
+}, true);
+`;
+
+const enc = new TextEncoder(), dec = new TextDecoder();
+const log = (...parts) => { const line = document.createElement("div"); line.textContent = parts.join(" "); const el = document.getElementById("log"); el.prepend(line); };
+const files = {
+  "index.md": "# Index page\n\nThis preview was read through **space.readFile**.\n\n- [[Linked page]]",
+  "test.canvas": null,
+};
+window.harness = { saves: [], syscalls: [], files };
+let iframe, savePromise = null, saveTimer = 0;
+
+// Simulates SB's global keybindings: Ctrl-k opens the page picker.
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.key === "k") { event.preventDefault(); log("SB handled Ctrl-k"); window.harness.ctrlK = (window.harness.ctrlK || 0) + 1; }
+});
+
+async function syscall(name, args) {
+  window.harness.syscalls.push([name, args]);
+  switch (name) {
+    case "system.getMode": return "rw";
+    case "space.readFile": if (files[args[0]] == null) throw new Error("Not found"); return enc.encode(files[args[0]]);
+    case "space.listFiles": return Object.keys(files).map((n) => ({ name: n, lastModified: 0 }));
+    case "editor.filterBox": return { name: "index.md" };
+    case "editor.prompt": return window.harness.promptAnswer ?? args[1];
+    case "editor.navigate": log("navigate ->", JSON.stringify(args[0])); window.harness.navigated = args[0]; return;
+    case "editor.openUrl": log("openUrl ->", args[0]); window.harness.opened = args[0]; return;
+    case "editor.flashNotification": log("notify:", args[0]); return;
+    default: throw new Error("Unknown syscall " + name);
+  }
+}
+
+function send(message) { message.internal ??= false; iframe.contentWindow.postMessage(message); }
+
+window.addEventListener("message", async (event) => {
+  if (event.source !== iframe.contentWindow) return;
+  const { type, data } = event.data;
+  if (type === "file-changed") {
+    document.getElementById("status").textContent = "unsaved";
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(requestSave, 1000);
+  } else if (type === "file-saved") {
+    savePromise = null;
+    files["test.canvas"] = dec.decode(data.data);
+    window.harness.saves.push(files["test.canvas"]);
+    document.getElementById("status").textContent = "saved (" + data.data.length + " bytes)";
+    log("file-saved", data.data.length, "bytes");
+  } else if (type === "syscall") {
+    let result;
+    try { result = { result: await syscall(data.name, data.args) }; } catch (error) { result = { error: error.message }; }
+    send({ type: "syscall-response", internal: true, data: { id: data.id, ...result } });
+  }
+});
+
+function requestSave() { savePromise = true; send({ type: "request-save" }); }
+window.harness.requestSave = requestSave;
+window.harness.openFile = (text) => send({ type: "file-open", data: { data: enc.encode(text), meta: { name: "test.canvas", extension: "canvas" }, details: undefined } });
+
+async function boot() {
+  const pluginHtml = await (await fetch("plug-editor.html")).text();
+  files["test.canvas"] = await (await fetch("demo.canvas")).text();
+  window.harness.original = files["test.canvas"];
+  const doc = new DOMParser().parseFromString(pluginHtml, "text/html");
+  const script = doc.createElement("script");
+  script.text = SHIM;
+  doc.head.prepend(script);
+  const base = doc.createElement("base");
+  base.href = document.baseURI;
+  doc.head.prepend(base);
+  doc.querySelector("html").setAttribute("data-theme", document.documentElement.getAttribute("data-theme") ?? "light");
+  iframe = document.createElement("iframe");
+  iframe.srcdoc = doc.documentElement.outerHTML;
+  const ready = new Promise((resolve) => iframe.addEventListener("load", resolve, { once: true }));
+  document.getElementById("host").appendChild(iframe);
+  await ready;
+  window.harness.openFile(files["test.canvas"]);
+  window.harness.iframe = iframe;
+  log("booted");
+}
+
+document.getElementById("theme").onclick = () => {
+  const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  send({ type: "set-theme", internal: true, data: { theme: next } });
+};
+document.getElementById("external").onclick = () => {
+  const data = JSON.parse(files["test.canvas"]);
+  data.nodes.push({ id: "external" + Date.now(), type: "text", text: "Added **externally**", x: 620, y: 60, width: 300, height: 80 });
+  files["test.canvas"] = JSON.stringify(data, null, "\t");
+  window.harness.openFile(files["test.canvas"]);
+};
+document.getElementById("save").onclick = requestSave;
+boot();
+</script>
+</body>
+</html>

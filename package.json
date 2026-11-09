@@ -1,0 +1,20 @@
+{
+  "name": "silverbullet-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight JSON Canvas (.canvas) editor plug for SilverBullet",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build:editor": "node build.mjs",
+    "build:plug": "plug-compile canvas.plug.yaml",
+    "build": "npm run build:editor && npm run build:plug",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "@silverbulletmd/silverbullet": "^2.12.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.0"
+  }
+}
